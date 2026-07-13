@@ -1,7 +1,8 @@
-import { db, deepSeekKey, id, openAIKey } from "@/lib/store";
+import { db, deepSeekKey, id, openAIKey, qwenKey } from "@/lib/store";
 import { resolveViewer } from "@/lib/auth";
+import { cosineSimilarity, embedTexts, parseEmbedding, QWEN_EMBEDDING_MODEL } from "@/lib/knowledge";
 
-type Doc = { id: string; name: string; content: string };
+type KnowledgeChunk = { chunkId: string; documentId: string; name: string; chunkIndex: number; content: string; embedding: string | null };
 type HistoryRow = { role: "user" | "assistant"; content: string };
 type MemoryRow = { summary: string; sourceCount: number };
 const stop = new Set(["的", "了", "是", "我", "在", "和", "有", "请", "吗", "怎么", "什么"]);
@@ -58,16 +59,31 @@ export async function POST(request: Request) {
     } catch { /* 保留已有摘要，主回答流程继续执行 */ }
   }
   const history = (await d1.prepare("SELECT role, content FROM conversations WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 12").bind(sessionId).all<HistoryRow>()).results.reverse();
-  const docs = (await d1.prepare("SELECT id, name, content FROM documents").all<Doc>()).results;
+  const chunks = (await d1.prepare(`SELECT c.id AS chunkId, c.document_id AS documentId, d.name, c.chunk_index AS chunkIndex, c.content, c.embedding
+    FROM knowledge_chunks c JOIN documents d ON d.id = c.document_id`).all<KnowledgeChunk>()).results;
   const queryTerms = terms(message);
-  const candidates = docs.map(doc => ({ ...doc, score: queryTerms.reduce((score, term) => score + (doc.content.toLowerCase().includes(term) ? 3 : 0) + (doc.name.toLowerCase().includes(term) ? 2 : 0), 0) })).sort((a, b) => b.score - a.score);
-  const minimumScore = Math.max(4, (candidates[0]?.score || 0) * 0.5);
-  const ranked = candidates.slice(0, 3).filter(doc => doc.score >= minimumScore);
+  let queryEmbedding: number[] | null = null;
+  const qwen = qwenKey();
+  if (qwen) {
+    try {
+      queryEmbedding = (await embedTexts([message.trim()], qwen))[0] || null;
+    } catch (error) {
+      console.error("Qwen query embedding failed", error);
+    }
+  }
+  const candidates = chunks.map(chunk => {
+    const keywordScore = queryTerms.reduce((score, term) => score + (chunk.content.toLowerCase().includes(term) ? 3 : 0) + (chunk.name.toLowerCase().includes(term) ? 2 : 0), 0);
+    const storedEmbedding = parseEmbedding(chunk.embedding);
+    const semanticScore = queryEmbedding && storedEmbedding ? cosineSimilarity(queryEmbedding, storedEmbedding) : 0;
+    const score = queryEmbedding && storedEmbedding ? semanticScore * 0.8 + Math.min(keywordScore / 12, 1) * 0.2 : Math.min(keywordScore / 12, 1);
+    return { ...chunk, keywordScore, semanticScore, score };
+  }).sort((a, b) => b.score - a.score);
+  const ranked = candidates.filter(chunk => chunk.keywordScore >= 4 || chunk.semanticScore >= 0.35).slice(0, 6);
   const urgent = /安全|泄露|全部|无法使用|sso-403|紧急/i.test(message);
   const wantsTicket = /工单|人工|处理|解决|登录不了|无法登录/i.test(message);
   const trace = [
     { step: "意图识别", detail: wantsTicket ? "故障诊断 / 可能创建工单" : "知识问答", status: "done" },
-    { step: "混合检索", detail: `命中 ${ranked.length} 份知识文档`, status: "done" },
+    { step: "混合检索", detail: queryEmbedding ? `千问 ${QWEN_EMBEDDING_MODEL} 语义向量 + 关键词，命中 ${ranked.length} 个知识片段` : `关键词检索命中 ${ranked.length} 个知识片段`, status: "done" },
     { step: "风险判断", detail: urgent ? "检测到高风险信号，建议人工介入" : "未检测到高风险操作", status: "done" },
   ];
   if (memory?.summary) trace.splice(1, 0, { step: "长期记忆", detail: `已加载压缩摘要，并保留最近 ${Math.ceil(history.length / 2)} 轮完整对话`, status: "done" });
@@ -78,7 +94,7 @@ export async function POST(request: Request) {
     await d1.prepare("INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ticket.id, ticket.title, ticket.description, ticket.category, ticket.priority, ticket.status, ticket.requester, now, now).run();
     trace.push({ step: "工具调用", detail: `已创建 ${ticket.id}，优先级 ${ticket.priority}`, status: "done" });
   }
-  const context = ranked.map((d, i) => `[${i + 1}] ${d.name}: ${d.content}`).join("\n");
+  const context = ranked.map((chunk, index) => `[${index + 1}] ${chunk.name} / 片段 ${chunk.chunkIndex + 1}: ${chunk.content}`).join("\n");
   let answer = ranked.length ? `我查阅了相关资料。${ranked[0].content}${urgent ? "\n\n该问题包含高风险信号，建议立即转人工处理。" : ""}${ticket ? `\n\n我已创建工单 ${ticket.id}，客服会按 ${ticket.priority === "high" ? "高" : "普通"}优先级跟进。` : ""}` : "当前知识库中没有找到足够可靠的答案。请补充错误码、发生时间、账号类型或订单号，我会继续诊断。";
   const openAI = openAIKey();
   if (deepSeek) {
@@ -117,7 +133,7 @@ export async function POST(request: Request) {
       if (ai.ok && data.output_text) answer = `${data.output_text}${ticket ? `\n\n已创建工单 ${ticket.id}。` : ""}`;
     } catch { trace.push({ step: "模型降级", detail: "模型暂不可用，已使用检索式回答", status: "done" }); }
   }
-  const citations = ranked.map((d, index) => ({ index: index + 1, id: d.id, name: d.name, excerpt: d.content.slice(0, 120) }));
+  const citations = ranked.map((chunk, index) => ({ index: index + 1, id: chunk.documentId, name: chunk.name, excerpt: chunk.content.slice(0, 120) }));
   const now = new Date().toISOString();
   await d1.batch([
     d1.prepare("INSERT INTO conversations (id, role, content, citations, trace, created_at, session_id) VALUES (?, 'user', ?, '[]', '[]', ?, ?)").bind(id("msg"), message.trim(), now, sessionId),

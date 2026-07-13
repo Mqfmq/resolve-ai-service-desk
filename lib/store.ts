@@ -1,9 +1,12 @@
 import { env } from "cloudflare:workers";
+import privateEnterpriseFaq from "@/knowledge/企业内部保密运营问答.md?raw";
+import { indexDocument, QWEN_EMBEDDING_MODEL } from "@/lib/knowledge";
 
 type RuntimeEnv = {
   DB: D1Database;
   FILES?: R2Bucket;
   DEEPSEEK_API_KEY?: string;
+  QWEN_API_KEY?: string;
   OPENAI_API_KEY?: string;
   MQF_ADMIN_PASSWORD?: string;
   AUTH_SECRET?: string;
@@ -16,6 +19,7 @@ export async function db() {
   const d1 = runtime.DB;
   await d1.batch([
     d1.prepare(`CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, name TEXT NOT NULL, content_type TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, chunk_count INTEGER NOT NULL, created_at TEXT NOT NULL)`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS knowledge_chunks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, content TEXT NOT NULL, embedding TEXT, embedding_model TEXT, created_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, requester TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, citations TEXT NOT NULL, trace TEXT NOT NULL, created_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS conversation_memory (id TEXT PRIMARY KEY, summary TEXT NOT NULL, source_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`),
@@ -23,6 +27,7 @@ export async function db() {
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS employee_accounts (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, password_salt TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS documents_created_idx ON documents(created_at)`),
+    d1.prepare(`CREATE INDEX IF NOT EXISTS knowledge_chunks_document_idx ON knowledge_chunks(document_id, chunk_index)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS tickets_status_idx ON tickets(status)`),
   ]);
   const conversationColumns = await d1.prepare("PRAGMA table_info(conversations)").all<{ name: string }>();
@@ -35,9 +40,17 @@ export async function db() {
   const now = new Date().toISOString();
   await d1.prepare("INSERT OR IGNORE INTO agent_sessions (id, display_name, mode, created_at, updated_at) VALUES ('legacy', '历史会话', 'guest', ?, ?)").bind(now, now).run();
   const seedVersion = await d1.prepare("SELECT value FROM app_metadata WHERE key = 'knowledge_seed_version'").first<{ value: string }>();
-  if (seedVersion?.value !== "2") {
+  if (seedVersion?.value !== "3") {
     await seed(d1);
-    await d1.prepare("INSERT INTO app_metadata (key, value) VALUES ('knowledge_seed_version', '2') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+    await d1.prepare("INSERT INTO app_metadata (key, value) VALUES ('knowledge_seed_version', '3') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+  }
+  const configuredQwenKey = qwenKey();
+  const targetIndexVersion = configuredQwenKey ? `qwen:${QWEN_EMBEDDING_MODEL}` : "chunks-only-v1";
+  const indexVersion = await d1.prepare("SELECT value FROM app_metadata WHERE key = 'knowledge_index_version'").first<{ value: string }>();
+  if (indexVersion?.value !== targetIndexVersion) {
+    const embedded = await rebuildKnowledgeIndex(d1, configuredQwenKey);
+    const completedVersion = embedded ? `qwen:${QWEN_EMBEDDING_MODEL}` : "chunks-only-v1";
+    await d1.prepare("INSERT INTO app_metadata (key, value) VALUES ('knowledge_index_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(completedVersion).run();
   }
   ready = true;
   return d1;
@@ -60,11 +73,25 @@ async function seed(d1: D1Database) {
     ["doc-password", "密码、多因素认证与密钥安全.md", "密码至少 12 位，建议使用密码管理器。企业管理员可强制启用多因素认证。恢复码只能使用一次并应离线保存。API Key 不得写入代码仓库、聊天记录或客户端页面；一旦暴露应立即吊销并重新生成，同时检查最近调用日志。"],
   ];
   await d1.batch(docs.map(([id, name, content]) => d1.prepare("INSERT OR IGNORE INTO documents VALUES (?, ?, 'text/markdown', ?, 'ready', 1, ?)").bind(id, name, content, now)));
+  await d1.prepare("INSERT OR IGNORE INTO documents VALUES (?, ?, 'text/markdown', ?, 'ready', 15, ?)")
+    .bind("doc-private-enterprise-faq", "企业内部保密运营问答.md", privateEnterpriseFaq, now)
+    .run();
   await d1.prepare("INSERT OR IGNORE INTO tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind("TK-1042", "企业账号无法登录", "重置密码后仍提示 SSO-403", "账号与权限", "high", "open", "林小满", now, now).run();
+}
+
+async function rebuildKnowledgeIndex(d1: D1Database, apiKey?: string) {
+  const documents = (await d1.prepare("SELECT id, content FROM documents ORDER BY created_at ASC").all<{ id: string; content: string }>()).results;
+  let fullyEmbedded = !!apiKey;
+  for (const document of documents) {
+    const result = await indexDocument(d1, document, apiKey);
+    fullyEmbedded = fullyEmbedded && result.embedded;
+  }
+  return fullyEmbedded;
 }
 
 export function files() { return runtime.FILES; }
 export function deepSeekKey() { return runtime.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY; }
+export function qwenKey() { return runtime.QWEN_API_KEY || process.env.QWEN_API_KEY; }
 export function openAIKey() { return runtime.OPENAI_API_KEY || process.env.OPENAI_API_KEY; }
 export function adminPassword() { return runtime.MQF_ADMIN_PASSWORD || process.env.MQF_ADMIN_PASSWORD; }
 export function authSecret() { return runtime.AUTH_SECRET || process.env.AUTH_SECRET; }

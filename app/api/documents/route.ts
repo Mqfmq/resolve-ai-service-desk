@@ -1,5 +1,6 @@
-import { db, files, id } from "@/lib/store";
+import { db, files, id, qwenKey } from "@/lib/store";
 import { resolveViewer } from "@/lib/auth";
+import { indexDocument } from "@/lib/knowledge";
 
 export async function POST(request: Request) {
   const d1 = await db();
@@ -14,9 +15,10 @@ export async function POST(request: Request) {
   const content = (await file.text()).trim();
   if (!content) return Response.json({ error: "文件内容为空" }, { status: 400 });
   const documentId = id("doc");
-  const chunks = Math.max(1, Math.ceil(content.length / 800));
+  const storedContent = content.slice(0, 100_000);
   const now = new Date().toISOString();
-  await d1.prepare("INSERT INTO documents VALUES (?, ?, ?, ?, 'ready', ?, ?)").bind(documentId, file.name, file.type || "text/plain", content.slice(0, 100_000), chunks, now).run();
+  await d1.prepare("INSERT INTO documents VALUES (?, ?, ?, ?, 'ready', 0, ?)").bind(documentId, file.name, file.type || "text/plain", storedContent, now).run();
+  const indexing = await indexDocument(d1, { id: documentId, content: storedContent }, qwenKey());
   await files()?.put(`${documentId}/${file.name}`, file.stream(), { httpMetadata: { contentType: file.type || "text/plain" } });
-  return Response.json({ id: documentId, name: file.name, contentType: file.type, status: "ready", chunkCount: chunks, createdAt: now });
+  return Response.json({ id: documentId, name: file.name, contentType: file.type, status: "ready", chunkCount: indexing.chunkCount, embeddingModel: indexing.embedded ? "text-embedding-v4" : null, createdAt: now });
 }

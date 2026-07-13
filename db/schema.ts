@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const documents = sqliteTable("documents", {
   id: text("id").primaryKey(),
@@ -9,6 +9,16 @@ export const documents = sqliteTable("documents", {
   chunkCount: integer("chunk_count").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+export const knowledgeChunks = sqliteTable("knowledge_chunks", {
+  id: text("id").primaryKey(),
+  documentId: text("document_id").notNull(),
+  chunkIndex: integer("chunk_index").notNull(),
+  content: text("content").notNull(),
+  embedding: text("embedding"),
+  embeddingModel: text("embedding_model"),
+  createdAt: text("created_at").notNull(),
+}, table => [index("knowledge_chunks_document_idx").on(table.documentId, table.chunkIndex)]);
 
 export const tickets = sqliteTable("tickets", {
   id: text("id").primaryKey(),
