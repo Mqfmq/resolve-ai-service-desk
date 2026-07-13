@@ -96,6 +96,26 @@ export default function Home() {
     await refresh(data.id);
   }
 
+  async function createConversation() {
+    if (viewerSession?.mode !== "employee") { setShowNewSession(true); return; }
+    const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "newConversation" }) });
+    const data = await response.json() as Session & { error?: string };
+    if (!response.ok) {
+      if (response.status === 401) {
+        window.sessionStorage.removeItem("resolve-session");
+        setSessionId(""); setViewerSessionId(""); setSessions([]); setShowNewSession(true);
+      }
+      setNotice(data.error || "新建对话失败");
+      return;
+    }
+    setSessionId(data.id);
+    window.sessionStorage.setItem("resolve-session", data.id);
+    setMessages([welcome(data.displayName)]);
+    setInput("");
+    setTab("chat");
+    await refresh(data.id);
+  }
+
   async function switchSession(id: string) {
     setSessionId(id);
     window.sessionStorage.setItem("resolve-session", id);
@@ -177,7 +197,7 @@ export default function Home() {
   return <main className="shell">
     <aside className="sidebar">
       <div className="brand"><span className="brandMark">R</span><div><strong>Resolve AI</strong><small>智能服务台</small></div></div>
-      <button className="newChat" onClick={() => setShowNewSession(true)}>＋ 新建 Agent 对话</button>
+      <button className="newChat" onClick={createConversation}>＋ 新建 Agent 对话</button>
       <nav>
         <button className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}><span>◫</span>Agent 对话</button>
         <button className={tab === "tickets" ? "active" : ""} onClick={() => setTab("tickets")}><span>◎</span>工单中心<i>{openCount}</i></button>

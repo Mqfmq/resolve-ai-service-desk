@@ -12,7 +12,21 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-  const body = await request.json() as { mode?: "employee" | "guest"; displayName?: string; password?: string };
+  const body = await request.json() as { action?: "newConversation"; mode?: "employee" | "guest"; displayName?: string; password?: string };
+  if (body.action === "newConversation") {
+    const d1 = await db();
+    const viewer = await resolveViewer(request, d1);
+    if (!viewer) return Response.json({ error: "登录状态已失效，请重新登录" }, { status: 401 });
+    if (viewer.mode !== "employee" || !viewer.accountId) return Response.json({ error: "游客模式请重新选择身份" }, { status: 403 });
+
+    const sessionId = id("session");
+    const now = new Date().toISOString();
+    await d1.prepare("INSERT INTO agent_sessions (id, display_name, mode, created_at, updated_at, account_id, auth_token_hash) VALUES (?, ?, 'employee', ?, ?, ?, NULL)")
+      .bind(sessionId, viewer.displayName, now, now, viewer.accountId)
+      .run();
+    return Response.json({ id: sessionId, displayName: viewer.displayName, mode: "employee", role: viewer.role, createdAt: now, updatedAt: now });
+  }
+
   const mode = body.mode === "guest" ? "guest" : "employee";
   const cleanName = body.displayName?.trim().slice(0, 30);
   const password = body.password || "";
