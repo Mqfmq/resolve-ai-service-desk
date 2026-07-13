@@ -42,7 +42,11 @@ export default function Home() {
     setTickets(data.tickets || []);
     setDocuments(data.documents || []);
     setSessions(data.sessions || []);
-    if (data.viewerSessionId) setViewerSessionId(data.viewerSessionId);
+    if (data.viewerSessionId) {
+      setViewerSessionId(data.viewerSessionId);
+      const viewer = data.sessions.find(item => item.id === data.viewerSessionId);
+      if (viewer?.mode === "employee") setEmployeeName(viewer.displayName);
+    }
     if (data.activeSessionId) setSessionId(data.activeSessionId);
     setMessages(data.conversations?.length ? data.conversations : [welcome(data.sessions.find(item => item.id === data.activeSessionId)?.displayName)]);
   }
@@ -53,19 +57,33 @@ export default function Home() {
     refresh(saved);
   }, []);
 
+  useEffect(() => {
+    if (!showNewSession) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeSessionModal();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [showNewSession]);
+
+  function closeSessionModal() {
+    setPassword("");
+    setShowNewSession(false);
+  }
+
   async function createSession(mode: "employee" | "guest") {
     if (mode === "employee" && !employeeName.trim()) { setNotice("请先输入员工姓名"); return; }
     if (mode === "employee" && password.length < 8) { setNotice("密码至少需要 8 位"); return; }
     const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, displayName: employeeName, password }) });
     const data = await response.json() as Session & { error?: string };
-    if (!response.ok) { setNotice(data.error || "新建对话失败"); return; }
+    if (!response.ok) { setNotice(data.error || "新建对话失败"); setPassword(""); return; }
     setSessions(prev => [data, ...prev]);
     setSessionId(data.id);
     setViewerSessionId(data.id);
     window.sessionStorage.setItem("resolve-session", data.id);
     setMessages([welcome(data.displayName)]);
     setInput("");
-    setEmployeeName("");
+    if (data.mode === "employee") setEmployeeName(data.displayName);
     setPassword("");
     setShowNewSession(false);
     setTab("chat");
@@ -129,9 +147,11 @@ export default function Home() {
   }
 
   async function logout() {
+    const lastEmployeeName = viewerSession?.mode === "employee" ? viewerSession.displayName : employeeName;
     await fetch("/api/sessions", { method: "DELETE" });
     window.sessionStorage.removeItem("resolve-session");
-    setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]); setShowNewSession(true);
+    setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]);
+    setEmployeeName(lastEmployeeName); setPassword(""); setShowNewSession(true);
   }
 
   const openCount = tickets.filter(ticket => ticket.status !== "closed").length;
@@ -159,7 +179,7 @@ export default function Home() {
       {tab === "knowledge" && <div className="contentPage">{viewerSession?.mode === "employee" && <div className="uploadCard" onClick={() => fileRef.current?.click()}><div>＋</div><h3>添加企业资料</h3><p>上传 TXT、Markdown 或 CSV，Agent 会自动加入检索索引</p><button>选择文件</button><input ref={fileRef} hidden type="file" accept=".txt,.md,.csv" onChange={event => upload(event.target.files?.[0])}/></div>}<div className="docHeader"><h2>已索引文档</h2><span>{documents.length} 份资料 · 点击可预览</span></div><div className="docGrid">{documents.map(document => <article key={document.id}><button className="docMain" onClick={() => previewDocument(document)}><div className="fileIcon">{document.name.endsWith(".md") ? "MD" : "TXT"}</div><div><b>{document.name}</b><small>{document.chunkCount} 个知识片段 · 可检索</small></div></button><div className="docActions"><button onClick={() => previewDocument(document)}>预览</button>{viewerSession?.mode === "employee" && <button className="danger" onClick={() => deleteDocument(document)}>删除</button>}</div></article>)}</div></div>}
     </section>
 
-    {showNewSession && <div className="modalBackdrop"><section className="modal sessionModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => sessionId && setShowNewSession(false)}>×</button><span className="modalEyebrow">SECURE SIGN IN</span><h2>员工密码登录</h2><p>首次使用的员工姓名会自动注册；以后必须使用同一密码登录。mqf 使用独立管理员密码。</p><label>员工姓名<input autoFocus value={employeeName} onChange={event => setEmployeeName(event.target.value)} placeholder="例如：林小满" maxLength={30}/></label><label>登录密码<input type="password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createSession("employee"); }} placeholder="至少 8 位" autoComplete="current-password"/></label><button className="primaryWide" onClick={() => createSession("employee")}>登录并新建对话</button><div className="modalDivider"><span>或者</span></div><button className="guestWide" onClick={() => createSession("guest")}>使用游客模式</button></section></div>}
+    {showNewSession && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeSessionModal(); }}><section className="modal sessionModal" role="dialog" aria-modal="true"><button className="modalClose" aria-label="关闭登录窗口" onClick={closeSessionModal}>×</button><span className="modalEyebrow">SECURE SIGN IN</span><h2>员工密码登录</h2><p>首次使用的员工姓名会自动注册；以后必须使用同一密码登录。mqf 使用独立管理员密码。</p><label>员工姓名<input autoFocus value={employeeName} onChange={event => setEmployeeName(event.target.value)} placeholder="例如：林小满" maxLength={30}/></label><label>登录密码<input type="password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createSession("employee"); }} placeholder="至少 8 位" autoComplete="current-password"/></label><button className="primaryWide" onClick={() => createSession("employee")}>登录并新建对话</button><div className="modalDivider"><span>或者</span></div><button className="guestWide" onClick={() => createSession("guest")}>使用游客模式</button></section></div>}
 
     {preview && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPreview(null); }}><section className="modal previewModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => setPreview(null)}>×</button><span className="modalEyebrow">KNOWLEDGE PREVIEW</span><h2>{preview.name}</h2><div className="previewMeta"><span>{preview.contentType || "text/markdown"}</span><span>{preview.chunkCount} 个知识片段</span><span>状态：可检索</span></div><pre>{preview.content}</pre><footer>{viewerSession?.mode === "employee" && <button className="dangerButton" onClick={() => deleteDocument(preview)}>删除文档</button>}<button className="primaryButton" onClick={() => setPreview(null)}>关闭预览</button></footer></section></div>}
 
