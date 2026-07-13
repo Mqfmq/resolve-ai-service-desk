@@ -124,11 +124,20 @@ export default function Home() {
   }
 
   async function deleteSession(session: Session) {
-    if (session.id === viewerSessionId) return;
-    if (!window.confirm(`确定删除“${session.displayName}”的这条历史对话吗？其中的消息和长期记忆也会被删除。`)) return;
+    const deletingLoginSession = session.id === viewerSessionId;
+    const consequence = deletingLoginSession ? "删除后会退出当前登录。" : "";
+    if (!window.confirm(`确定删除“${session.displayName}”的这条对话吗？其中的消息和长期记忆也会被删除。${consequence}`)) return;
     const response = await fetch(`/api/sessions?sessionId=${encodeURIComponent(session.id)}`, { method: "DELETE" });
-    const data = await response.json() as { error?: string };
+    const data = await response.json() as { error?: string; loggedOut?: boolean };
     if (!response.ok) { setNotice(data.error || "删除对话失败"); return; }
+    if (data.loggedOut || deletingLoginSession) {
+      const lastEmployeeName = viewerSession?.mode === "employee" ? viewerSession.displayName : employeeName;
+      window.sessionStorage.removeItem("resolve-session");
+      setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]);
+      setEmployeeName(lastEmployeeName); setPassword(""); setShowNewSession(true);
+      setNotice("当前对话已删除，请重新登录");
+      return;
+    }
     const nextSessionId = session.id === sessionId ? viewerSessionId : sessionId;
     await refresh(nextSessionId);
     setNotice("历史对话已删除");
@@ -203,7 +212,7 @@ export default function Home() {
         <button className={tab === "tickets" ? "active" : ""} onClick={() => setTab("tickets")}><span>◎</span>工单中心<i>{openCount}</i></button>
         <button className={tab === "knowledge" ? "active" : ""} onClick={() => setTab("knowledge")}><span>▤</span>知识库</button>
       </nav>
-      <div className="sessionList"><h4>{viewerSession?.displayName.toLowerCase() === "mqf" ? "全部最近对话" : "我的最近对话"}</h4>{sessions.slice(0, 8).map(session => <div className="sessionItem" key={session.id}><button className={`sessionOpen ${session.id === sessionId ? "selected" : ""}`} onClick={() => switchSession(session.id)}><span>{session.mode === "guest" ? "游" : session.displayName.slice(0, 1)}</span><div><b>{session.displayName}</b><small>{session.id === viewerSessionId ? "当前身份" : session.mode === "guest" ? "游客模式" : "历史会话"}</small></div></button>{session.id !== viewerSessionId && <button className="sessionDelete" aria-label={`删除 ${session.displayName} 的历史对话`} title="删除历史对话" onClick={() => deleteSession(session)}>×</button>}</div>)}</div>
+      <div className="sessionList"><h4>{viewerSession?.displayName.toLowerCase() === "mqf" ? "全部最近对话" : "我的最近对话"}</h4>{sessions.slice(0, 8).map(session => <div className="sessionItem" key={session.id}><button className={`sessionOpen ${session.id === sessionId ? "selected" : ""}`} onClick={() => switchSession(session.id)}><span>{session.mode === "guest" ? "游" : session.displayName.slice(0, 1)}</span><div><b>{session.displayName}</b><small>{session.id === viewerSessionId ? "当前身份" : session.mode === "guest" ? "游客模式" : "历史会话"}</small></div></button><button className="sessionDelete" aria-label={`删除 ${session.displayName} 的对话`} title="删除对话" onClick={() => deleteSession(session)}>×</button></div>)}</div>
       <div className="sideFoot"><div className="statusDot"/><div><b>{viewerSession?.displayName || "尚未登录"}</b><small>{viewerSession ? "密码验证已通过" : "请登录"}</small></div>{viewerSession && <button className="logoutButton" onClick={logout}>退出</button>}</div>
     </aside>
 
