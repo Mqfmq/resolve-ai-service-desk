@@ -1,6 +1,7 @@
 import { db, deepSeekKey, id, openAIKey } from "@/lib/store";
 
 type Doc = { id: string; name: string; content: string };
+type HistoryRow = { role: "user" | "assistant"; content: string };
 const stop = new Set(["的", "了", "是", "我", "在", "和", "有", "请", "吗", "怎么", "什么"]);
 function terms(text: string) {
   const normalized = text.toLowerCase();
@@ -18,6 +19,7 @@ export async function POST(request: Request) {
   const { message } = await request.json() as { message?: string };
   if (!message?.trim()) return Response.json({ error: "请输入问题" }, { status: 400 });
   const d1 = await db();
+  const history = (await d1.prepare("SELECT role, content FROM conversations ORDER BY created_at DESC LIMIT 24").all<HistoryRow>()).results.reverse();
   const docs = (await d1.prepare("SELECT id, name, content FROM documents").all<Doc>()).results;
   const queryTerms = terms(message);
   const candidates = docs.map(doc => ({ ...doc, score: queryTerms.reduce((score, term) => score + (doc.content.toLowerCase().includes(term) ? 3 : 0) + (doc.name.toLowerCase().includes(term) ? 2 : 0), 0) })).sort((a, b) => b.score - a.score);
@@ -56,6 +58,7 @@ export async function POST(request: Request) {
                 ? "你是 Resolve AI 企业客服 Agent。优先依据提供的企业资料回答，不得编造企业政策、价格、账号或订单信息。引用资料时保留 [1] 等编号。资料无法覆盖的部分，可以使用通用知识补充，但必须明确区分。回答简洁、专业、可执行。"
                 : "你是 Resolve AI 智能助手。当前企业知识库没有相关资料，请直接使用通用知识回答用户问题，不要重复要求用户提供错误码或订单号。若问题涉及企业内部政策、账号、订单或实时数据，说明你无法确认内部信息，并告诉用户需要补充什么。回答简洁、专业、可执行。",
             },
+            ...history.map(item => ({ role: item.role, content: item.content })),
             { role: "user", content: ranked.length ? `用户问题：${message}\n\n检索到的企业资料：\n${context}` : `用户问题：${message}\n\n当前未检索到相关企业资料，请使用通用知识正常回答。` },
           ],
         }),
