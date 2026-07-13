@@ -66,6 +66,31 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const d1 = await db();
   const viewer = await resolveViewer(request, d1);
+
+  const targetSessionId = new URL(request.url).searchParams.get("sessionId");
+  if (targetSessionId) {
+    if (!viewer) return Response.json({ error: "请先登录" }, { status: 401 });
+    if (targetSessionId === viewer.id) return Response.json({ error: "当前登录会话不能删除，请先退出登录" }, { status: 400 });
+
+    const target = await d1.prepare("SELECT id, display_name AS displayName, mode, account_id AS accountId FROM agent_sessions WHERE id = ?")
+      .bind(targetSessionId)
+      .first<{ id: string; displayName: string; mode: "employee" | "guest"; accountId: string | null }>();
+    if (!target) return Response.json({ error: "对话不存在或已被删除" }, { status: 404 });
+
+    const sameEmployee = viewer.mode === "employee" && target.mode === "employee" && (
+      (viewer.accountId !== null && target.accountId === viewer.accountId) ||
+      (target.accountId === null && viewer.displayName.trim().toLowerCase() === target.displayName.trim().toLowerCase())
+    );
+    if (viewer.role !== "admin" && !sameEmployee) return Response.json({ error: "无权删除该对话" }, { status: 403 });
+
+    await d1.batch([
+      d1.prepare("DELETE FROM conversations WHERE session_id = ?").bind(targetSessionId),
+      d1.prepare("DELETE FROM conversation_memory WHERE id = ?").bind(targetSessionId),
+      d1.prepare("DELETE FROM agent_sessions WHERE id = ?").bind(targetSessionId),
+    ]);
+    return Response.json({ ok: true });
+  }
+
   if (viewer) await d1.prepare("UPDATE agent_sessions SET auth_token_hash = NULL WHERE id = ?").bind(viewer.id).run();
   const secure = new URL(request.url).protocol === "https:";
   return Response.json({ ok: true }, { headers: { "Set-Cookie": clearAuthCookie(secure) } });
