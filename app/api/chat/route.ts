@@ -78,7 +78,7 @@ export async function POST(request: Request) {
     const score = queryEmbedding && storedEmbedding ? semanticScore * 0.8 + Math.min(keywordScore / 12, 1) * 0.2 : Math.min(keywordScore / 12, 1);
     return { ...chunk, keywordScore, semanticScore, score };
   }).sort((a, b) => b.score - a.score);
-  const ranked = candidates.filter(chunk => chunk.keywordScore >= 4 || chunk.semanticScore >= 0.35).slice(0, 6);
+  const ranked = candidates.filter(chunk => chunk.keywordScore >= 4 || chunk.semanticScore >= 0.35).slice(0, 2);
   const urgent = /安全|泄露|全部|无法使用|sso-403|紧急/i.test(message);
   const wantsTicket = /工单|人工|处理|解决|登录不了|无法登录/i.test(message);
   const trace = [
