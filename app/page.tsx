@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 type Citation = { index: number; id: string; name: string; excerpt: string };
 type Trace = { step: string; detail: string; status: string };
@@ -71,6 +71,12 @@ export default function Home() {
     const timeout = window.setTimeout(() => setNotice(""), 5000);
     return () => window.clearTimeout(timeout);
   }, [notice]);
+
+  useLayoutEffect(() => {
+    if (tab !== "chat") return;
+    const messagePanel = document.querySelector<HTMLDivElement>(".messages");
+    if (messagePanel) messagePanel.scrollTop = messagePanel.scrollHeight;
+  }, [tab, sessionId, messages, loading]);
 
   function closeSessionModal() {
     setPassword("");
