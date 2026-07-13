@@ -17,12 +17,17 @@ function terms(text: string) {
 }
 
 export async function POST(request: Request) {
-  const { message, sessionId } = await request.json() as { message?: string; sessionId?: string };
+  const { message, sessionId, actorSessionId } = await request.json() as { message?: string; sessionId?: string; actorSessionId?: string };
   if (!message?.trim()) return Response.json({ error: "请输入问题" }, { status: 400 });
   if (!sessionId) return Response.json({ error: "请先新建或选择一个 Agent 对话" }, { status: 400 });
+  if (!actorSessionId) return Response.json({ error: "当前身份已失效，请重新新建对话" }, { status: 401 });
   const d1 = await db();
   const session = await d1.prepare("SELECT id, display_name AS displayName, mode FROM agent_sessions WHERE id = ?").bind(sessionId).first<{ id: string; displayName: string; mode: string }>();
+  const actor = await d1.prepare("SELECT id, display_name AS displayName, mode FROM agent_sessions WHERE id = ?").bind(actorSessionId).first<{ id: string; displayName: string; mode: string }>();
   if (!session) return Response.json({ error: "当前对话不存在，请重新新建" }, { status: 404 });
+  if (!actor) return Response.json({ error: "当前身份已失效，请重新新建对话" }, { status: 401 });
+  const sameOwner = actor.mode === "guest" ? actor.id === session.id : session.mode === "employee" && actor.displayName.trim().toLowerCase() === session.displayName.trim().toLowerCase();
+  if (!sameOwner) return Response.json({ error: "该对话为只读历史，不能使用他人身份发送消息" }, { status: 403 });
   const deepSeek = deepSeekKey();
   const total = await d1.prepare("SELECT COUNT(*) AS count FROM conversations WHERE session_id = ?").bind(sessionId).first<{ count: number }>();
   const eligibleCount = Math.max(0, Number(total?.count || 0) - 12);
