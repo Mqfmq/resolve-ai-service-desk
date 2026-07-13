@@ -38,6 +38,18 @@ export const agentSessions = sqliteTable("agent_sessions", {
   mode: text("mode").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  accountId: text("account_id"),
+  authTokenHash: text("auth_token_hash"),
+});
+
+export const employeeAccounts = sqliteTable("employee_accounts", {
+  id: text("id").primaryKey(),
+  displayName: text("display_name").notNull(),
+  normalizedName: text("normalized_name").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  passwordSalt: text("password_salt").notNull(),
+  role: text("role").notNull(),
+  createdAt: text("created_at").notNull(),
 });
 
 export const conversationMemory = sqliteTable("conversation_memory", {

@@ -5,6 +5,8 @@ type RuntimeEnv = {
   FILES?: R2Bucket;
   DEEPSEEK_API_KEY?: string;
   OPENAI_API_KEY?: string;
+  MQF_ADMIN_PASSWORD?: string;
+  AUTH_SECRET?: string;
 };
 const runtime = env as unknown as RuntimeEnv;
 
@@ -19,6 +21,7 @@ export async function db() {
     d1.prepare(`CREATE TABLE IF NOT EXISTS conversation_memory (id TEXT PRIMARY KEY, summary TEXT NOT NULL, source_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS agent_sessions (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, mode TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS employee_accounts (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, normalized_name TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, password_salt TEXT NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS documents_created_idx ON documents(created_at)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS tickets_status_idx ON tickets(status)`),
   ]);
@@ -26,8 +29,11 @@ export async function db() {
   if (!conversationColumns.results.some(column => column.name === "session_id")) {
     await d1.prepare("ALTER TABLE conversations ADD COLUMN session_id TEXT NOT NULL DEFAULT 'legacy'").run();
   }
+  const sessionColumns = await d1.prepare("PRAGMA table_info(agent_sessions)").all<{ name: string }>();
+  if (!sessionColumns.results.some(column => column.name === "account_id")) await d1.prepare("ALTER TABLE agent_sessions ADD COLUMN account_id TEXT").run();
+  if (!sessionColumns.results.some(column => column.name === "auth_token_hash")) await d1.prepare("ALTER TABLE agent_sessions ADD COLUMN auth_token_hash TEXT").run();
   const now = new Date().toISOString();
-  await d1.prepare("INSERT OR IGNORE INTO agent_sessions VALUES ('legacy', '历史会话', 'guest', ?, ?)").bind(now, now).run();
+  await d1.prepare("INSERT OR IGNORE INTO agent_sessions (id, display_name, mode, created_at, updated_at) VALUES ('legacy', '历史会话', 'guest', ?, ?)").bind(now, now).run();
   const seedVersion = await d1.prepare("SELECT value FROM app_metadata WHERE key = 'knowledge_seed_version'").first<{ value: string }>();
   if (seedVersion?.value !== "2") {
     await seed(d1);
@@ -60,4 +66,6 @@ async function seed(d1: D1Database) {
 export function files() { return runtime.FILES; }
 export function deepSeekKey() { return runtime.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY; }
 export function openAIKey() { return runtime.OPENAI_API_KEY || process.env.OPENAI_API_KEY; }
+export function adminPassword() { return runtime.MQF_ADMIN_PASSWORD || process.env.MQF_ADMIN_PASSWORD; }
+export function authSecret() { return runtime.AUTH_SECRET || process.env.AUTH_SECRET; }
 export function id(prefix: string) { return `${prefix}-${crypto.randomUUID().slice(0, 8)}`; }

@@ -22,6 +22,7 @@ export default function Home() {
   const [viewerSessionId, setViewerSessionId] = useState("");
   const [showNewSession, setShowNewSession] = useState(false);
   const [employeeName, setEmployeeName] = useState("");
+  const [password, setPassword] = useState("");
   const [preview, setPreview] = useState<Document | null>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -32,40 +33,40 @@ export default function Home() {
   const viewerSession = sessions.find(session => session.id === viewerSessionId);
   const canWrite = !!currentSession && !!viewerSession && (viewerSession.mode === "guest" ? viewerSession.id === currentSession.id : currentSession.mode === "employee" && viewerSession.displayName.trim().toLowerCase() === currentSession.displayName.trim().toLowerCase());
 
-  async function refresh(targetSessionId?: string, viewerId?: string) {
+  async function refresh(targetSessionId?: string) {
     const selected = targetSessionId || sessionId;
-    const actor = viewerId || viewerSessionId;
-    const response = await fetch(`/api/bootstrap?sessionId=${encodeURIComponent(selected)}&viewerSessionId=${encodeURIComponent(actor)}`);
+    const response = await fetch(`/api/bootstrap?sessionId=${encodeURIComponent(selected)}`);
+    if (response.status === 401) { setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]); setShowNewSession(true); return; }
     if (!response.ok) return;
-    const data = await response.json() as { tickets: Ticket[]; documents: Document[]; conversations: Message[]; sessions: Session[]; activeSessionId?: string | null };
+    const data = await response.json() as { tickets: Ticket[]; documents: Document[]; conversations: Message[]; sessions: Session[]; activeSessionId?: string | null; viewerSessionId?: string };
     setTickets(data.tickets || []);
     setDocuments(data.documents || []);
     setSessions(data.sessions || []);
+    if (data.viewerSessionId) setViewerSessionId(data.viewerSessionId);
     if (data.activeSessionId) setSessionId(data.activeSessionId);
-    if (actor) setMessages(data.conversations?.length ? data.conversations : [welcome(data.sessions.find(item => item.id === data.activeSessionId)?.displayName)]);
+    setMessages(data.conversations?.length ? data.conversations : [welcome(data.sessions.find(item => item.id === data.activeSessionId)?.displayName)]);
   }
 
   useEffect(() => {
     const saved = window.sessionStorage.getItem("resolve-session") || "";
-    const savedViewer = window.sessionStorage.getItem("resolve-viewer-session") || saved;
     setSessionId(saved);
-    setViewerSessionId(savedViewer);
-    refresh(saved, savedViewer).then(() => { if (!savedViewer) setShowNewSession(true); });
+    refresh(saved);
   }, []);
 
   async function createSession(mode: "employee" | "guest") {
     if (mode === "employee" && !employeeName.trim()) { setNotice("请先输入员工姓名"); return; }
-    const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, displayName: employeeName }) });
+    if (mode === "employee" && password.length < 8) { setNotice("密码至少需要 8 位"); return; }
+    const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, displayName: employeeName, password }) });
     const data = await response.json() as Session & { error?: string };
     if (!response.ok) { setNotice(data.error || "新建对话失败"); return; }
     setSessions(prev => [data, ...prev]);
     setSessionId(data.id);
     setViewerSessionId(data.id);
     window.sessionStorage.setItem("resolve-session", data.id);
-    window.sessionStorage.setItem("resolve-viewer-session", data.id);
     setMessages([welcome(data.displayName)]);
     setInput("");
     setEmployeeName("");
+    setPassword("");
     setShowNewSession(false);
     setTab("chat");
   }
@@ -74,7 +75,7 @@ export default function Home() {
     setSessionId(id);
     window.sessionStorage.setItem("resolve-session", id);
     setTab("chat");
-    await refresh(id, viewerSessionId);
+    await refresh(id);
   }
 
   async function send(text = input) {
@@ -86,7 +87,7 @@ export default function Home() {
     setLoading(true);
     try {
       if (!canWrite) throw new Error("该对话为只读历史，不能使用他人身份发送消息");
-      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: clean, sessionId, actorSessionId: viewerSessionId }) });
+      const response = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: clean, sessionId }) });
       const data = await response.json() as { error?: string; answer: string; citations: Citation[]; trace: Trace[]; ticket?: Ticket };
       if (!response.ok) throw new Error(data.error || "请求失败");
       setMessages(prev => [...prev, { role: "assistant", content: data.answer, citations: data.citations, trace: data.trace }]);
@@ -127,6 +128,12 @@ export default function Home() {
     setTickets(prev => prev.map(item => item.id === ticket.id ? { ...item, status } : item));
   }
 
+  async function logout() {
+    await fetch("/api/sessions", { method: "DELETE" });
+    window.sessionStorage.removeItem("resolve-session");
+    setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]); setShowNewSession(true);
+  }
+
   const openCount = tickets.filter(ticket => ticket.status !== "closed").length;
 
   return <main className="shell">
@@ -139,7 +146,7 @@ export default function Home() {
         <button className={tab === "knowledge" ? "active" : ""} onClick={() => setTab("knowledge")}><span>▤</span>知识库</button>
       </nav>
       <div className="sessionList"><h4>{viewerSession?.displayName.toLowerCase() === "mqf" ? "全部最近对话" : "我的最近对话"}</h4>{sessions.slice(0, 8).map(session => <button key={session.id} className={session.id === sessionId ? "selected" : ""} onClick={() => switchSession(session.id)}><span>{session.mode === "guest" ? "游" : session.displayName.slice(0, 1)}</span><div><b>{session.displayName}</b><small>{session.id === viewerSessionId ? "当前身份" : session.mode === "guest" ? "游客模式" : "历史会话"}</small></div></button>)}</div>
-      <div className="sideFoot"><div className="statusDot"/><div><b>{viewerSession?.displayName || "尚未选择身份"}</b><small>{viewerSession ? "当前登录身份" : "请新建对话"}</small></div></div>
+      <div className="sideFoot"><div className="statusDot"/><div><b>{viewerSession?.displayName || "尚未登录"}</b><small>{viewerSession ? "密码验证已通过" : "请登录"}</small></div>{viewerSession && <button className="logoutButton" onClick={logout}>退出</button>}</div>
     </aside>
 
     <section className="workspace">
@@ -149,12 +156,12 @@ export default function Home() {
 
       {tab === "tickets" && <div className="contentPage"><div className="toolbar"><div className="search">⌕ 搜索工单</div><button onClick={() => { setTab("chat"); setInput("请帮我创建一个工单："); }}>＋ 新建工单</button></div><div className="table"><div className="tr th"><span>工单</span><span>分类</span><span>优先级</span><span>状态</span><span>提交人</span><span>操作</span></div>{tickets.map(ticket => <div className="tr" key={ticket.id}><span><b>{ticket.title}</b><small>{ticket.id}</small></span><span>{ticket.category}</span><span><i className={`priority ${ticket.priority}`}>{ticket.priority === "high" ? "高" : ticket.priority === "low" ? "低" : "普通"}</i></span><span><i className={`ticketStatus ${ticket.status}`}>{ticket.status === "closed" ? "已关闭" : ticket.status === "resolved" ? "已解决" : "处理中"}</i></span><span>{ticket.requester}</span><span><select value={ticket.status} onChange={event => updateTicket(ticket, event.target.value)}><option value="open">处理中</option><option value="resolved">已解决</option><option value="closed">已关闭</option></select></span></div>)}</div></div>}
 
-      {tab === "knowledge" && <div className="contentPage"><div className="uploadCard" onClick={() => fileRef.current?.click()}><div>＋</div><h3>添加企业资料</h3><p>上传 TXT、Markdown 或 CSV，Agent 会自动加入检索索引</p><button>选择文件</button><input ref={fileRef} hidden type="file" accept=".txt,.md,.csv" onChange={event => upload(event.target.files?.[0])}/></div><div className="docHeader"><h2>已索引文档</h2><span>{documents.length} 份资料 · 点击可预览</span></div><div className="docGrid">{documents.map(document => <article key={document.id}><button className="docMain" onClick={() => previewDocument(document)}><div className="fileIcon">{document.name.endsWith(".md") ? "MD" : "TXT"}</div><div><b>{document.name}</b><small>{document.chunkCount} 个知识片段 · 可检索</small></div></button><div className="docActions"><button onClick={() => previewDocument(document)}>预览</button><button className="danger" onClick={() => deleteDocument(document)}>删除</button></div></article>)}</div></div>}
+      {tab === "knowledge" && <div className="contentPage">{viewerSession?.mode === "employee" && <div className="uploadCard" onClick={() => fileRef.current?.click()}><div>＋</div><h3>添加企业资料</h3><p>上传 TXT、Markdown 或 CSV，Agent 会自动加入检索索引</p><button>选择文件</button><input ref={fileRef} hidden type="file" accept=".txt,.md,.csv" onChange={event => upload(event.target.files?.[0])}/></div>}<div className="docHeader"><h2>已索引文档</h2><span>{documents.length} 份资料 · 点击可预览</span></div><div className="docGrid">{documents.map(document => <article key={document.id}><button className="docMain" onClick={() => previewDocument(document)}><div className="fileIcon">{document.name.endsWith(".md") ? "MD" : "TXT"}</div><div><b>{document.name}</b><small>{document.chunkCount} 个知识片段 · 可检索</small></div></button><div className="docActions"><button onClick={() => previewDocument(document)}>预览</button>{viewerSession?.mode === "employee" && <button className="danger" onClick={() => deleteDocument(document)}>删除</button>}</div></article>)}</div></div>}
     </section>
 
-    {showNewSession && <div className="modalBackdrop"><section className="modal sessionModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => sessionId && setShowNewSession(false)}>×</button><span className="modalEyebrow">NEW CONVERSATION</span><h2>新建 Agent 对话</h2><p>员工会话会以姓名隔离历史和长期记忆；也可以使用匿名游客模式。</p><label>员工姓名<input autoFocus value={employeeName} onChange={event => setEmployeeName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createSession("employee"); }} placeholder="例如：林小满" maxLength={30}/></label><button className="primaryWide" onClick={() => createSession("employee")}>以员工身份开始</button><div className="modalDivider"><span>或者</span></div><button className="guestWide" onClick={() => createSession("guest")}>使用游客模式</button></section></div>}
+    {showNewSession && <div className="modalBackdrop"><section className="modal sessionModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => sessionId && setShowNewSession(false)}>×</button><span className="modalEyebrow">SECURE SIGN IN</span><h2>员工密码登录</h2><p>首次使用的员工姓名会自动注册；以后必须使用同一密码登录。mqf 使用独立管理员密码。</p><label>员工姓名<input autoFocus value={employeeName} onChange={event => setEmployeeName(event.target.value)} placeholder="例如：林小满" maxLength={30}/></label><label>登录密码<input type="password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createSession("employee"); }} placeholder="至少 8 位" autoComplete="current-password"/></label><button className="primaryWide" onClick={() => createSession("employee")}>登录并新建对话</button><div className="modalDivider"><span>或者</span></div><button className="guestWide" onClick={() => createSession("guest")}>使用游客模式</button></section></div>}
 
-    {preview && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPreview(null); }}><section className="modal previewModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => setPreview(null)}>×</button><span className="modalEyebrow">KNOWLEDGE PREVIEW</span><h2>{preview.name}</h2><div className="previewMeta"><span>{preview.contentType || "text/markdown"}</span><span>{preview.chunkCount} 个知识片段</span><span>状态：可检索</span></div><pre>{preview.content}</pre><footer><button className="dangerButton" onClick={() => deleteDocument(preview)}>删除文档</button><button className="primaryButton" onClick={() => setPreview(null)}>关闭预览</button></footer></section></div>}
+    {preview && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPreview(null); }}><section className="modal previewModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => setPreview(null)}>×</button><span className="modalEyebrow">KNOWLEDGE PREVIEW</span><h2>{preview.name}</h2><div className="previewMeta"><span>{preview.contentType || "text/markdown"}</span><span>{preview.chunkCount} 个知识片段</span><span>状态：可检索</span></div><pre>{preview.content}</pre><footer>{viewerSession?.mode === "employee" && <button className="dangerButton" onClick={() => deleteDocument(preview)}>删除文档</button>}<button className="primaryButton" onClick={() => setPreview(null)}>关闭预览</button></footer></section></div>}
 
     {notice && <button className="toast" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
   </main>;
