@@ -34,7 +34,7 @@ Agent 将执行以下步骤：
 - 全栈运行时：vinext、Cloudflare Workers
 - 数据库：Cloudflare D1、Drizzle ORM
 - 文件存储：Cloudflare R2
-- AI 接口：OpenAI Responses API（可选）
+- AI 接口：DeepSeek Chat Completions API（首选）、OpenAI Responses API（备用）
 - 样式：Tailwind CSS 4 + 自定义响应式 CSS
 - 部署：OpenAI Sites / Cloudflare
 
@@ -79,9 +79,15 @@ npm run build
 npm run db:generate
 ```
 
-## 配置 OpenAI 模型
+## 配置 AI 模型
 
-项目没有配置 API Key 时仍可使用本地检索式回答和工单工具。若要启用模型生成，请在本地环境或部署平台中设置：
+项目没有配置 API Key 时仍可使用本地检索式回答和工单工具。默认优先调用 DeepSeek：
+
+```env
+DEEPSEEK_API_KEY=你的密钥
+```
+
+也可以配置 OpenAI 作为备用模型：
 
 ```env
 OPENAI_API_KEY=你的密钥

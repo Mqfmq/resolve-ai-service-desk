@@ -1,6 +1,11 @@
 import { env } from "cloudflare:workers";
 
-type RuntimeEnv = { DB: D1Database; FILES?: R2Bucket; OPENAI_API_KEY?: string };
+type RuntimeEnv = {
+  DB: D1Database;
+  FILES?: R2Bucket;
+  DEEPSEEK_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+};
 const runtime = env as unknown as RuntimeEnv;
 
 let ready = false;
@@ -32,5 +37,6 @@ async function seed(d1: D1Database) {
 }
 
 export function files() { return runtime.FILES; }
-export function openAIKey() { return runtime.OPENAI_API_KEY; }
+export function deepSeekKey() { return runtime.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY; }
+export function openAIKey() { return runtime.OPENAI_API_KEY || process.env.OPENAI_API_KEY; }
 export function id(prefix: string) { return `${prefix}-${crypto.randomUUID().slice(0, 8)}`; }
