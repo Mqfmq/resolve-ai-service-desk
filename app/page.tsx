@@ -66,6 +66,12 @@ export default function Home() {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [showNewSession]);
 
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(""), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
   function closeSessionModal() {
     setPassword("");
     setShowNewSession(false);
