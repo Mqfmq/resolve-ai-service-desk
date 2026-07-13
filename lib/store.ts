@@ -17,10 +17,22 @@ export async function db() {
     d1.prepare(`CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, requester TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, citations TEXT NOT NULL, trace TEXT NOT NULL, created_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS conversation_memory (id TEXT PRIMARY KEY, summary TEXT NOT NULL, source_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS agent_sessions (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, mode TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS documents_created_idx ON documents(created_at)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS tickets_status_idx ON tickets(status)`),
   ]);
-  await seed(d1);
+  const conversationColumns = await d1.prepare("PRAGMA table_info(conversations)").all<{ name: string }>();
+  if (!conversationColumns.results.some(column => column.name === "session_id")) {
+    await d1.prepare("ALTER TABLE conversations ADD COLUMN session_id TEXT NOT NULL DEFAULT 'legacy'").run();
+  }
+  const now = new Date().toISOString();
+  await d1.prepare("INSERT OR IGNORE INTO agent_sessions VALUES ('legacy', '历史会话', 'guest', ?, ?)").bind(now, now).run();
+  const seedVersion = await d1.prepare("SELECT value FROM app_metadata WHERE key = 'knowledge_seed_version'").first<{ value: string }>();
+  if (seedVersion?.value !== "2") {
+    await seed(d1);
+    await d1.prepare("INSERT INTO app_metadata (key, value) VALUES ('knowledge_seed_version', '2') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+  }
   ready = true;
   return d1;
 }

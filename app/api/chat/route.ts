@@ -17,16 +17,19 @@ function terms(text: string) {
 }
 
 export async function POST(request: Request) {
-  const { message } = await request.json() as { message?: string };
+  const { message, sessionId } = await request.json() as { message?: string; sessionId?: string };
   if (!message?.trim()) return Response.json({ error: "请输入问题" }, { status: 400 });
+  if (!sessionId) return Response.json({ error: "请先新建或选择一个 Agent 对话" }, { status: 400 });
   const d1 = await db();
+  const session = await d1.prepare("SELECT id, display_name AS displayName, mode FROM agent_sessions WHERE id = ?").bind(sessionId).first<{ id: string; displayName: string; mode: string }>();
+  if (!session) return Response.json({ error: "当前对话不存在，请重新新建" }, { status: 404 });
   const deepSeek = deepSeekKey();
-  const total = await d1.prepare("SELECT COUNT(*) AS count FROM conversations").first<{ count: number }>();
+  const total = await d1.prepare("SELECT COUNT(*) AS count FROM conversations WHERE session_id = ?").bind(sessionId).first<{ count: number }>();
   const eligibleCount = Math.max(0, Number(total?.count || 0) - 12);
-  let memory = await d1.prepare("SELECT summary, source_count AS sourceCount FROM conversation_memory WHERE id = 'main'").first<MemoryRow>();
+  let memory = await d1.prepare("SELECT summary, source_count AS sourceCount FROM conversation_memory WHERE id = ?").bind(sessionId).first<MemoryRow>();
   if (deepSeek && eligibleCount > (memory?.sourceCount || 0)) {
     const offset = memory?.sourceCount || 0;
-    const newRows = (await d1.prepare("SELECT role, content FROM conversations ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?").bind(eligibleCount - offset, offset).all<HistoryRow>()).results;
+    const newRows = (await d1.prepare("SELECT role, content FROM conversations WHERE session_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?").bind(sessionId, eligibleCount - offset, offset).all<HistoryRow>()).results;
     try {
       const summaryResponse = await fetch("https://api.deepseek.com/chat/completions", {
         method: "POST",
@@ -43,12 +46,12 @@ export async function POST(request: Request) {
       const summaryData = await summaryResponse.json() as { choices?: Array<{ message?: { content?: string } }> };
       const summary = summaryData.choices?.[0]?.message?.content;
       if (summaryResponse.ok && summary) {
-        await d1.prepare("INSERT INTO conversation_memory (id, summary, source_count, updated_at) VALUES ('main', ?, ?, ?) ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, source_count = excluded.source_count, updated_at = excluded.updated_at").bind(summary, eligibleCount, new Date().toISOString()).run();
+        await d1.prepare("INSERT INTO conversation_memory (id, summary, source_count, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, source_count = excluded.source_count, updated_at = excluded.updated_at").bind(sessionId, summary, eligibleCount, new Date().toISOString()).run();
         memory = { summary, sourceCount: eligibleCount };
       }
     } catch { /* 保留已有摘要，主回答流程继续执行 */ }
   }
-  const history = (await d1.prepare("SELECT role, content FROM conversations ORDER BY created_at DESC, rowid DESC LIMIT 12").all<HistoryRow>()).results.reverse();
+  const history = (await d1.prepare("SELECT role, content FROM conversations WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 12").bind(sessionId).all<HistoryRow>()).results.reverse();
   const docs = (await d1.prepare("SELECT id, name, content FROM documents").all<Doc>()).results;
   const queryTerms = terms(message);
   const candidates = docs.map(doc => ({ ...doc, score: queryTerms.reduce((score, term) => score + (doc.content.toLowerCase().includes(term) ? 3 : 0) + (doc.name.toLowerCase().includes(term) ? 2 : 0), 0) })).sort((a, b) => b.score - a.score);
@@ -65,7 +68,7 @@ export async function POST(request: Request) {
   let ticket: Record<string, string> | null = null;
   if (wantsTicket && ranked.length) {
     const now = new Date().toISOString();
-    ticket = { id: id("TK").toUpperCase(), title: message.slice(0, 36), description: message, category: /登录|账号|密码|SSO/i.test(message) ? "账号与权限" : "技术支持", priority: urgent ? "high" : "medium", status: "open", requester: "当前访客", createdAt: now, updatedAt: now };
+    ticket = { id: id("TK").toUpperCase(), title: message.slice(0, 36), description: message, category: /登录|账号|密码|SSO/i.test(message) ? "账号与权限" : "技术支持", priority: urgent ? "high" : "medium", status: "open", requester: session.displayName, createdAt: now, updatedAt: now };
     await d1.prepare("INSERT INTO tickets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(ticket.id, ticket.title, ticket.description, ticket.category, ticket.priority, ticket.status, ticket.requester, now, now).run();
     trace.push({ step: "工具调用", detail: `已创建 ${ticket.id}，优先级 ${ticket.priority}`, status: "done" });
   }
@@ -111,8 +114,9 @@ export async function POST(request: Request) {
   const citations = ranked.map((d, index) => ({ index: index + 1, id: d.id, name: d.name, excerpt: d.content.slice(0, 120) }));
   const now = new Date().toISOString();
   await d1.batch([
-    d1.prepare("INSERT INTO conversations VALUES (?, 'user', ?, '[]', '[]', ?)").bind(id("msg"), message.trim(), now),
-    d1.prepare("INSERT INTO conversations VALUES (?, 'assistant', ?, ?, ?, ?)").bind(id("msg"), answer, JSON.stringify(citations), JSON.stringify(trace), now),
+    d1.prepare("INSERT INTO conversations (id, role, content, citations, trace, created_at, session_id) VALUES (?, 'user', ?, '[]', '[]', ?, ?)").bind(id("msg"), message.trim(), now, sessionId),
+    d1.prepare("INSERT INTO conversations (id, role, content, citations, trace, created_at, session_id) VALUES (?, 'assistant', ?, ?, ?, ?, ?)").bind(id("msg"), answer, JSON.stringify(citations), JSON.stringify(trace), now, sessionId),
+    d1.prepare("UPDATE agent_sessions SET updated_at = ? WHERE id = ?").bind(now, sessionId),
   ]);
   return Response.json({ answer, citations, trace, ticket });
 }

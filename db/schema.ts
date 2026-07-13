@@ -29,6 +29,15 @@ export const conversations = sqliteTable("conversations", {
   citations: text("citations").notNull(),
   trace: text("trace").notNull(),
   createdAt: text("created_at").notNull(),
+  sessionId: text("session_id").notNull().default("legacy"),
+});
+
+export const agentSessions = sqliteTable("agent_sessions", {
+  id: text("id").primaryKey(),
+  displayName: text("display_name").notNull(),
+  mode: text("mode").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });
 
 export const conversationMemory = sqliteTable("conversation_memory", {
