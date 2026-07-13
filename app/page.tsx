@@ -36,7 +36,7 @@ export default function Home() {
   async function refresh(targetSessionId?: string) {
     const selected = targetSessionId || sessionId;
     const response = await fetch(`/api/bootstrap?sessionId=${encodeURIComponent(selected)}`);
-    if (response.status === 401) { setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]); setShowNewSession(true); return; }
+    if (response.status === 401) { setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]); openSessionModal(); return; }
     if (!response.ok) return;
     const data = await response.json() as { tickets: Ticket[]; documents: Document[]; conversations: Message[]; sessions: Session[]; activeSessionId?: string | null; viewerSessionId?: string };
     setTickets(data.tickets || []);
@@ -77,9 +77,14 @@ export default function Home() {
     setShowNewSession(false);
   }
 
+  function openSessionModal() {
+    setPassword("");
+    setShowNewSession(true);
+  }
+
   async function createSession(mode: "employee" | "guest") {
-    if (mode === "employee" && !employeeName.trim()) { setNotice("请先输入员工姓名"); return; }
-    if (mode === "employee" && password.length < 8) { setNotice("密码至少需要 8 位"); return; }
+    if (mode === "employee" && !employeeName.trim()) { setNotice("请先输入员工姓名"); setPassword(""); return; }
+    if (mode === "employee" && password.length < 8) { setNotice("密码至少需要 8 位"); setPassword(""); return; }
     const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, displayName: employeeName, password }) });
     const data = await response.json() as Session & { error?: string };
     if (!response.ok) { setNotice(data.error || "新建对话失败"); setPassword(""); return; }
@@ -97,13 +102,13 @@ export default function Home() {
   }
 
   async function createConversation() {
-    if (viewerSession?.mode !== "employee") { setShowNewSession(true); return; }
+    if (viewerSession?.mode !== "employee") { openSessionModal(); return; }
     const response = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "newConversation" }) });
     const data = await response.json() as Session & { error?: string };
     if (!response.ok) {
       if (response.status === 401) {
         window.sessionStorage.removeItem("resolve-session");
-        setSessionId(""); setViewerSessionId(""); setSessions([]); setShowNewSession(true);
+        setSessionId(""); setViewerSessionId(""); setSessions([]); openSessionModal();
       }
       setNotice(data.error || "新建对话失败");
       return;
@@ -134,7 +139,7 @@ export default function Home() {
       const lastEmployeeName = viewerSession?.mode === "employee" ? viewerSession.displayName : employeeName;
       window.sessionStorage.removeItem("resolve-session");
       setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]);
-      setEmployeeName(lastEmployeeName); setPassword(""); setShowNewSession(true);
+      setEmployeeName(lastEmployeeName); openSessionModal();
       setNotice("当前对话已删除，请重新登录");
       return;
     }
@@ -145,7 +150,7 @@ export default function Home() {
 
   async function send(text = input) {
     const clean = text.trim();
-    if (!sessionId) { setShowNewSession(true); return; }
+    if (!sessionId) { openSessionModal(); return; }
     if (!clean || loading) return;
     setInput("");
     setMessages(prev => [...prev, { role: "user", content: clean }]);
@@ -198,7 +203,7 @@ export default function Home() {
     await fetch("/api/sessions", { method: "DELETE" });
     window.sessionStorage.removeItem("resolve-session");
     setSessionId(""); setViewerSessionId(""); setSessions([]); setMessages([welcome()]);
-    setEmployeeName(lastEmployeeName); setPassword(""); setShowNewSession(true);
+    setEmployeeName(lastEmployeeName); openSessionModal();
   }
 
   const openCount = tickets.filter(ticket => ticket.status !== "closed").length;
@@ -226,7 +231,7 @@ export default function Home() {
       {tab === "knowledge" && <div className="contentPage">{viewerSession?.mode === "employee" && <div className="uploadCard" onClick={() => fileRef.current?.click()}><div>＋</div><h3>添加企业资料</h3><p>上传 TXT、Markdown 或 CSV，Agent 会自动加入检索索引</p><button>选择文件</button><input ref={fileRef} hidden type="file" accept=".txt,.md,.csv" onChange={event => upload(event.target.files?.[0])}/></div>}<div className="docHeader"><h2>已索引文档</h2><span>{documents.length} 份资料 · 点击可预览</span></div><div className="docGrid">{documents.map(document => <article key={document.id}><button className="docMain" onClick={() => previewDocument(document)}><div className="fileIcon">{document.name.endsWith(".md") ? "MD" : "TXT"}</div><div><b>{document.name}</b><small>{document.chunkCount} 个知识片段 · 可检索</small></div></button><div className="docActions"><button onClick={() => previewDocument(document)}>预览</button>{viewerSession?.mode === "employee" && <button className="danger" onClick={() => deleteDocument(document)}>删除</button>}</div></article>)}</div></div>}
     </section>
 
-    {showNewSession && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeSessionModal(); }}><section className="modal sessionModal" role="dialog" aria-modal="true"><button className="modalClose" aria-label="关闭登录窗口" onClick={closeSessionModal}>×</button><span className="modalEyebrow">SECURE SIGN IN</span><h2>员工密码登录</h2><p>首次使用的员工姓名会自动注册；以后必须使用同一密码登录。mqf 使用独立管理员密码。</p><label>员工姓名<input autoFocus value={employeeName} onChange={event => setEmployeeName(event.target.value)} placeholder="例如：林小满" maxLength={30}/></label><label>登录密码<input type="password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createSession("employee"); }} placeholder="至少 8 位" autoComplete="current-password"/></label><button className="primaryWide" onClick={() => createSession("employee")}>登录并新建对话</button><div className="modalDivider"><span>或者</span></div><button className="guestWide" onClick={() => createSession("guest")}>使用游客模式</button></section></div>}
+    {showNewSession && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) closeSessionModal(); }}><section className="modal sessionModal" role="dialog" aria-modal="true"><button className="modalClose" aria-label="关闭登录窗口" onClick={closeSessionModal}>×</button><span className="modalEyebrow">SECURE SIGN IN</span><h2>员工密码登录</h2><p>首次使用的员工姓名会自动注册；以后必须使用同一密码登录。mqf 使用独立管理员密码。</p><label>员工姓名<input autoFocus value={employeeName} onChange={event => setEmployeeName(event.target.value)} placeholder="例如：林小满" maxLength={30}/></label><label>登录密码<input type="password" name="resolve-ai-employee-password" value={password} onChange={event => setPassword(event.target.value)} onKeyDown={event => { if (event.key === "Enter") createSession("employee"); }} placeholder="至少 8 位" autoComplete="new-password" data-1p-ignore="true" data-lpignore="true"/></label><button className="primaryWide" onClick={() => createSession("employee")}>登录并新建对话</button><div className="modalDivider"><span>或者</span></div><button className="guestWide" onClick={() => createSession("guest")}>使用游客模式</button></section></div>}
 
     {preview && <div className="modalBackdrop" onMouseDown={event => { if (event.target === event.currentTarget) setPreview(null); }}><section className="modal previewModal" role="dialog" aria-modal="true"><button className="modalClose" onClick={() => setPreview(null)}>×</button><span className="modalEyebrow">KNOWLEDGE PREVIEW</span><h2>{preview.name}</h2><div className="previewMeta"><span>{preview.contentType || "text/markdown"}</span><span>{preview.chunkCount} 个知识片段</span><span>状态：可检索</span></div><pre>{preview.content}</pre><footer>{viewerSession?.mode === "employee" && <button className="dangerButton" onClick={() => deleteDocument(preview)}>删除文档</button>}<button className="primaryButton" onClick={() => setPreview(null)}>关闭预览</button></footer></section></div>}
 
