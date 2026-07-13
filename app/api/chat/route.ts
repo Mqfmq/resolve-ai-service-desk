@@ -2,6 +2,7 @@ import { db, deepSeekKey, id, openAIKey } from "@/lib/store";
 
 type Doc = { id: string; name: string; content: string };
 type HistoryRow = { role: "user" | "assistant"; content: string };
+type MemoryRow = { summary: string; sourceCount: number };
 const stop = new Set(["的", "了", "是", "我", "在", "和", "有", "请", "吗", "怎么", "什么"]);
 function terms(text: string) {
   const normalized = text.toLowerCase();
@@ -19,7 +20,35 @@ export async function POST(request: Request) {
   const { message } = await request.json() as { message?: string };
   if (!message?.trim()) return Response.json({ error: "请输入问题" }, { status: 400 });
   const d1 = await db();
-  const history = (await d1.prepare("SELECT role, content FROM conversations ORDER BY created_at DESC LIMIT 24").all<HistoryRow>()).results.reverse();
+  const deepSeek = deepSeekKey();
+  const total = await d1.prepare("SELECT COUNT(*) AS count FROM conversations").first<{ count: number }>();
+  const eligibleCount = Math.max(0, Number(total?.count || 0) - 12);
+  let memory = await d1.prepare("SELECT summary, source_count AS sourceCount FROM conversation_memory WHERE id = 'main'").first<MemoryRow>();
+  if (deepSeek && eligibleCount > (memory?.sourceCount || 0)) {
+    const offset = memory?.sourceCount || 0;
+    const newRows = (await d1.prepare("SELECT role, content FROM conversations ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?").bind(eligibleCount - offset, offset).all<HistoryRow>()).results;
+    try {
+      const summaryResponse = await fetch("https://api.deepseek.com/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${deepSeek}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "deepseek-v4-flash",
+          temperature: 0,
+          messages: [
+            { role: "system", content: "你负责压缩长期对话记忆。保留用户身份与偏好、明确事实、目标、约束、已经做出的决定、未完成事项和关键结论；删除寒暄、重复内容和临时措辞。不得发明信息。使用简洁中文分点输出。" },
+            { role: "user", content: `已有长期摘要：\n${memory?.summary || "（无）"}\n\n需要合并的新对话：\n${newRows.map(row => `${row.role}: ${row.content}`).join("\n")}` },
+          ],
+        }),
+      });
+      const summaryData = await summaryResponse.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const summary = summaryData.choices?.[0]?.message?.content;
+      if (summaryResponse.ok && summary) {
+        await d1.prepare("INSERT INTO conversation_memory (id, summary, source_count, updated_at) VALUES ('main', ?, ?, ?) ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, source_count = excluded.source_count, updated_at = excluded.updated_at").bind(summary, eligibleCount, new Date().toISOString()).run();
+        memory = { summary, sourceCount: eligibleCount };
+      }
+    } catch { /* 保留已有摘要，主回答流程继续执行 */ }
+  }
+  const history = (await d1.prepare("SELECT role, content FROM conversations ORDER BY created_at DESC, rowid DESC LIMIT 12").all<HistoryRow>()).results.reverse();
   const docs = (await d1.prepare("SELECT id, name, content FROM documents").all<Doc>()).results;
   const queryTerms = terms(message);
   const candidates = docs.map(doc => ({ ...doc, score: queryTerms.reduce((score, term) => score + (doc.content.toLowerCase().includes(term) ? 3 : 0) + (doc.name.toLowerCase().includes(term) ? 2 : 0), 0) })).sort((a, b) => b.score - a.score);
@@ -32,6 +61,7 @@ export async function POST(request: Request) {
     { step: "混合检索", detail: `命中 ${ranked.length} 份知识文档`, status: "done" },
     { step: "风险判断", detail: urgent ? "检测到高风险信号，建议人工介入" : "未检测到高风险操作", status: "done" },
   ];
+  if (memory?.summary) trace.splice(1, 0, { step: "长期记忆", detail: `已加载压缩摘要，并保留最近 ${Math.ceil(history.length / 2)} 轮完整对话`, status: "done" });
   let ticket: Record<string, string> | null = null;
   if (wantsTicket && ranked.length) {
     const now = new Date().toISOString();
@@ -41,7 +71,6 @@ export async function POST(request: Request) {
   }
   const context = ranked.map((d, i) => `[${i + 1}] ${d.name}: ${d.content}`).join("\n");
   let answer = ranked.length ? `我查阅了相关资料。${ranked[0].content}${urgent ? "\n\n该问题包含高风险信号，建议立即转人工处理。" : ""}${ticket ? `\n\n我已创建工单 ${ticket.id}，客服会按 ${ticket.priority === "high" ? "高" : "普通"}优先级跟进。` : ""}` : "当前知识库中没有找到足够可靠的答案。请补充错误码、发生时间、账号类型或订单号，我会继续诊断。";
-  const deepSeek = deepSeekKey();
   const openAI = openAIKey();
   if (deepSeek) {
     try {
@@ -58,6 +87,7 @@ export async function POST(request: Request) {
                 ? "你是 Resolve AI 企业客服 Agent。优先依据提供的企业资料回答，不得编造企业政策、价格、账号或订单信息。引用资料时保留 [1] 等编号。资料无法覆盖的部分，可以使用通用知识补充，但必须明确区分。回答简洁、专业、可执行。"
                 : "你是 Resolve AI 智能助手。当前企业知识库没有相关资料，请直接使用通用知识回答用户问题，不要重复要求用户提供错误码或订单号。若问题涉及企业内部政策、账号、订单或实时数据，说明你无法确认内部信息，并告诉用户需要补充什么。回答简洁、专业、可执行。",
             },
+            ...(memory?.summary ? [{ role: "system" as const, content: `更早对话的长期记忆摘要：\n${memory.summary}` }] : []),
             ...history.map(item => ({ role: item.role, content: item.content })),
             { role: "user", content: ranked.length ? `用户问题：${message}\n\n检索到的企业资料：\n${context}` : `用户问题：${message}\n\n当前未检索到相关企业资料，请使用通用知识正常回答。` },
           ],

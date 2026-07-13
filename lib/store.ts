@@ -16,6 +16,7 @@ export async function db() {
     d1.prepare(`CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, name TEXT NOT NULL, content_type TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, chunk_count INTEGER NOT NULL, created_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS tickets (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, category TEXT NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, requester TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
     d1.prepare(`CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, citations TEXT NOT NULL, trace TEXT NOT NULL, created_at TEXT NOT NULL)`),
+    d1.prepare(`CREATE TABLE IF NOT EXISTS conversation_memory (id TEXT PRIMARY KEY, summary TEXT NOT NULL, source_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS documents_created_idx ON documents(created_at)`),
     d1.prepare(`CREATE INDEX IF NOT EXISTS tickets_status_idx ON tickets(status)`),
   ]);

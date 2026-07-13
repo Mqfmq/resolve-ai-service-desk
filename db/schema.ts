@@ -30,3 +30,10 @@ export const conversations = sqliteTable("conversations", {
   trace: text("trace").notNull(),
   createdAt: text("created_at").notNull(),
 });
+
+export const conversationMemory = sqliteTable("conversation_memory", {
+  id: text("id").primaryKey(),
+  summary: text("summary").notNull(),
+  sourceCount: integer("source_count").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
